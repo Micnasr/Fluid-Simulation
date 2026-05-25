@@ -54,14 +54,108 @@ void Simulation::Draw() const
 
 void Simulation::Update(float deltaTime)
 {
+    ClearAccelerations();
+
+    ApplyGravity();
+    ApplyMousePush();
+
+    IntegrateParticles(deltaTime);
+    ResolveBoundaryCollisions();
+}
+
+void Simulation::ClearAccelerations()
+{
     for (Particle& particle : particles)
     {
-        particle.force = { 0.0f, gravity };
+        particle.acceleration = { 0.0f, 0.0f };
+    }
+}
 
-        particle.velocity.x += particle.force.x * deltaTime;
-        particle.velocity.y += particle.force.y * deltaTime;
+void Simulation::ApplyGravity()
+{
+    for (Particle& particle : particles)
+    {
+        particle.acceleration.y += gravity;
+    }
+}
+
+void Simulation::IntegrateParticles(float deltaTime)
+{
+    for (Particle& particle : particles)
+    {
+        particle.velocity.x += particle.acceleration.x * deltaTime;
+        particle.velocity.y += particle.acceleration.y * deltaTime;
 
         particle.position.x += particle.velocity.x * deltaTime;
         particle.position.y += particle.velocity.y * deltaTime;
+    }
+}
+
+void Simulation::ResolveBoundaryCollisions()
+{
+    for (Particle& particle : particles)
+    {
+        if (particle.position.x - particleRadius < 0.0f)
+        {
+            particle.position.x = particleRadius;
+            particle.velocity.x *= -collisionDamping;
+        }
+
+        if (particle.position.x + particleRadius > worldWidth)
+        {
+            particle.position.x = worldWidth - particleRadius;
+            particle.velocity.x *= -collisionDamping;
+        }
+
+        if (particle.position.y - particleRadius < 0.0f)
+        {
+            particle.position.y = particleRadius;
+            particle.velocity.y *= -collisionDamping;
+        }
+
+        if (particle.position.y + particleRadius > worldHeight)
+        {
+            particle.position.y = worldHeight - particleRadius;
+            particle.velocity.y *= -collisionDamping;
+        }
+    }
+}
+
+void Simulation::ApplyMousePush()
+{
+    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT))
+    {
+        return;
+    }
+
+    const Vector2 mouseScreenPosition = GetMousePosition();
+
+	// Convert mouse position from screen pixels to world units.
+    const Vector2 mousePosition = {
+        mouseScreenPosition.x / pixelsPerMeter,
+        mouseScreenPosition.y / pixelsPerMeter
+    };
+
+    for (Particle& particle : particles)
+    {
+        const Vector2 offset = {
+            particle.position.x - mousePosition.x,
+            particle.position.y - mousePosition.y
+        };
+
+		// Calculate the distance from the particle to the mouse position.
+        const float distance = sqrtf(offset.x * offset.x + offset.y * offset.y);
+
+		// If the particle is within the mouse radius, apply a force pushing it away from the mouse position.
+        if (distance > 0.0f && distance < mouseRadius)
+        {
+            const Vector2 directionAwayFromMouse = {
+                offset.x / distance,
+                offset.y / distance
+            };
+
+            particle.acceleration.x += directionAwayFromMouse.x * mouseStrength;
+            particle.acceleration.y += directionAwayFromMouse.y * mouseStrength;
+        }
     }
 }

@@ -7,7 +7,7 @@ struct Particle
 {
     Vector2 position{};
     Vector2 velocity{};
-    Vector2 force{};
+    Vector2 acceleration{};
 
     float density = 0.0f;
     float pressure = 0.0f;
