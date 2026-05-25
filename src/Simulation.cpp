@@ -17,7 +17,7 @@ void Simulation::Reset()
     particles.clear();
 
     constexpr int columns = 20;
-    constexpr int rows = 15;
+    constexpr int rows = 30;
 
     const float blockWidth = (columns - 1) * particleSpacing;
     const float startX = (worldWidth - blockWidth) * 0.5f;
@@ -30,17 +30,21 @@ void Simulation::Reset()
         for (int column = 0; column < columns; ++column)
         {
             Particle particle;
+
+            const float jitterX = spawnJitter * GetRandomValue(-1000, 1000) / 1000.0f;
+            const float jitterY = spawnJitter * GetRandomValue(-1000, 1000) / 1000.0f;
+
+            // Introduce small position variations per particle
             particle.position = {
-                startX + column * particleSpacing,
-                startY + row * particleSpacing
+                startX + column * particleSpacing + jitterX,
+                startY + row * particleSpacing + jitterY
             };
 
             particles.push_back(particle);
         }
     }
 
-    CalculateDensities();
-    CalculatePressures();
+    CalculateDensitiesAndPressures();
 }
 
 // Draw particles as circles, converting from world units to screen pixels.
@@ -61,16 +65,22 @@ void Simulation::Draw() const
 
 void Simulation::Update(float deltaTime)
 {
-    CalculateDensities();
-    CalculatePressures();
-    
-    ClearAccelerations();
-    ApplyGravity();
-    ApplyMousePush();
-    ApplyPressureAccelerations();
+    constexpr int substeps = 4;
+    const float stepTime = deltaTime / substeps;
 
-    IntegrateParticles(deltaTime);
-    ResolveBoundaryCollisions();
+    for (int step = 0; step < substeps; ++step)
+    {
+        CalculateDensitiesAndPressures();
+
+        ClearAccelerations();
+        ApplyGravity();
+        ApplyMousePush();
+        ApplyPressureAccelerations();
+		ApplyViscosityAccelerations();
+
+        IntegrateParticles(stepTime);
+        ResolveBoundaryCollisions();
+    }
 }
 
 void Simulation::ClearAccelerations()
@@ -79,6 +89,11 @@ void Simulation::ClearAccelerations()
     {
         particle.acceleration = { 0.0f, 0.0f };
     }
+}
+
+std::size_t Simulation::GetParticleCount() const
+{
+    return particles.size();
 }
 
 void Simulation::ApplyGravity()
@@ -131,6 +146,14 @@ void Simulation::ResolveBoundaryCollisions()
     }
 }
 
+float Simulation::DistanceBetween(Vector2 firstPosition, Vector2 secondPosition) const
+{
+    const float offsetX = firstPosition.x - secondPosition.x;
+    const float offsetY = firstPosition.y - secondPosition.y;
+
+    return sqrtf(offsetX * offsetX + offsetY * offsetY);
+}
+
 void Simulation::ApplyMousePush()
 {
     if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT))
@@ -153,8 +176,8 @@ void Simulation::ApplyMousePush()
             particle.position.y - mousePosition.y
         };
 
-		// Calculate the distance from the particle to the mouse position.
-        const float distance = sqrtf(offset.x * offset.x + offset.y * offset.y);
+        // Calculate the distance from the particle to the mouse position.
+        const float distance = DistanceBetween(particle.position, mousePosition);
 
 		// If the particle is within the mouse radius, apply a force pushing it away from the mouse position.
         if (distance > 0.0f && distance < mouseRadius)
@@ -184,7 +207,7 @@ float Simulation::SmoothingKernel(float distance) const
     return scale * value * value * value;
 }
 
-void Simulation::CalculateDensities()
+void Simulation::CalculateDensitiesAndPressures()
 {
     for (Particle& particle : particles)
     {
@@ -192,23 +215,12 @@ void Simulation::CalculateDensities()
 
         for (const Particle& neighbour : particles)
         {
-            const float offsetX = particle.position.x - neighbour.position.x;
-            const float offsetY = particle.position.y - neighbour.position.y;
+            const float distance = DistanceBetween(particle.position, neighbour.position);
 
-            const float distance = sqrtf(offsetX * offsetX + offsetY * offsetY);
-
-            // In 2D, density is mass distributed across area by the kernel.
             particle.density += particleMass * SmoothingKernel(distance);
         }
-    }
-}
 
-void Simulation::CalculatePressures() // TODO: can this be inplemented above in CalculateDensities() to save a loop?
-{
-    for (Particle& particle : particles)
-    {
         const float densityError = particle.density - targetDensity;
-
         particle.pressure = std::max(0.0f, pressureStiffness * densityError);
     }
 }
@@ -249,33 +261,47 @@ float Simulation::PressureKernelDerivative(float distance) const
 
 void Simulation::ApplyPressureAccelerations()
 {
-    for (Particle& particle : particles)
+    for (std::size_t i = 0; i < particles.size(); ++i)
     {
+        Particle& particle = particles[i];
         Vector2 pressureAcceleration = { 0.0f, 0.0f };
 
-        for (const Particle& neighbour : particles)
+        for (std::size_t j = 0; j < particles.size(); ++j)
         {
-            if (&particle == &neighbour)
+            if (i == j)
             {
                 continue;
             }
+
+            const Particle& neighbour = particles[j];
 
             const Vector2 offset = {
                 particle.position.x - neighbour.position.x,
                 particle.position.y - neighbour.position.y
             };
 
-            const float distance = sqrtf(offset.x * offset.x + offset.y * offset.y);
+            float distance = DistanceBetween(particle.position, neighbour.position);
 
-            if (distance <= 0.0f || distance >= smoothingRadius)
+            if (distance >= smoothingRadius)
             {
                 continue;
             }
 
-            const Vector2 directionAwayFromNeighbour = {
-                offset.x / distance,
-                offset.y / distance
-            };
+            Vector2 directionAwayFromNeighbour;
+
+            if (distance < 0.0001f)
+            {
+                // Coincident particles still need opposite separation pressure.
+                directionAwayFromNeighbour = {i < j ? -1.0f : 1.0f, 0.0f};
+                distance = 0.0001f;
+            }
+            else
+            {
+                directionAwayFromNeighbour = {
+                    offset.x / distance,
+                    offset.y / distance
+                };
+            }
 
             const float sharedPressure = (particle.pressure + neighbour.pressure) * 0.5f;
 
@@ -298,5 +324,64 @@ void Simulation::ApplyPressureAccelerations()
 
         particle.acceleration.x += pressureAcceleration.x;
         particle.acceleration.y += pressureAcceleration.y;
+    }
+}
+
+float Simulation::ViscosityKernelLaplacian(float distance) const
+{
+    if (distance >= smoothingRadius)
+    {
+        return 0.0f;
+    }
+
+    const float h = smoothingRadius;
+    const float scale = 40.0f / (PI * std::pow(h, 5.0f));
+
+    return scale * (h - distance);
+}
+
+void Simulation::ApplyViscosityAccelerations()
+{
+    for (Particle& particle : particles)
+    {
+        Vector2 viscosityAcceleration = { 0.0f, 0.0f };
+
+        for (const Particle& neighbour : particles)
+        {
+            if (&particle == &neighbour)
+            {
+                continue;
+            }
+
+            const float distance = DistanceBetween(particle.position, neighbour.position);
+
+            if (distance >= smoothingRadius)
+            {
+                continue;
+            }
+
+            const float densityProduct = particle.density * neighbour.density;
+
+            if (densityProduct <= 0.0f)
+            {
+                continue;
+            }
+
+            const Vector2 velocityDifference = {
+                neighbour.velocity.x - particle.velocity.x,
+                neighbour.velocity.y - particle.velocity.y
+            };
+
+            const float laplacian = ViscosityKernelLaplacian(distance);
+
+			// Equation 14 from "Smoothed Particle Hydrodynamics for Fluid Simulation"
+            const float influence = viscosityStrength * particleMass * laplacian / densityProduct;
+
+            viscosityAcceleration.x += velocityDifference.x * influence;
+            viscosityAcceleration.y += velocityDifference.y * influence;
+        }
+
+        particle.acceleration.x += viscosityAcceleration.x;
+        particle.acceleration.y += viscosityAcceleration.y;
     }
 }

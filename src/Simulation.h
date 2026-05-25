@@ -13,19 +13,24 @@ public:
     void Draw() const;
     void Update(float deltaTime);
 
+    std::size_t GetParticleCount() const;
+
 private:
     void ClearAccelerations();
     void ApplyGravity();
     void ApplyMousePush();
     void IntegrateParticles(float deltaTime);
     void ResolveBoundaryCollisions();
+    float DistanceBetween(Vector2 firstPosition, Vector2 secondPosition) const;
     
-    void CalculateDensities();
+    void CalculateDensitiesAndPressures();
     float SmoothingKernel(float distance) const;
     
-    void CalculatePressures();
     void ApplyPressureAccelerations();
     float PressureKernelDerivative(float distance) const;
+
+    void ApplyViscosityAccelerations();
+    float ViscosityKernelLaplacian(float distance) const;
 
     Color GetPressureColor(float pressure) const;
 
@@ -37,10 +42,12 @@ private:
 
     float particleRadius = 0.04f;
     float particleSpacing = 0.10f;
+    float spawnJitter = 0.01f;
     
     float particleMass = 0.01f;
     float targetDensity = 1.0f;
     float pressureStiffness = 20.0f;
+    float viscosityStrength = 0.01f;
     
     float gravity = 9.81f;
 

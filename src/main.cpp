@@ -24,6 +24,17 @@ int main()
 
         simulation.Draw();
 
+		// Draw FPS and particle count for debugging.
+        DrawFPS(10, 10);
+
+        DrawText(
+            TextFormat("Particles: %i", static_cast<int>(simulation.GetParticleCount())),
+            10,
+            35,
+            20,
+            WHITE
+        );
+
         EndDrawing();
     }
 
