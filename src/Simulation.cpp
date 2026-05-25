@@ -2,6 +2,8 @@
 
 #include "raylib.h"
 
+#include <cmath>
+
 Simulation::Simulation(int screenWidth, int screenHeight)
     : worldWidth(screenWidth / pixelsPerMeter),
       worldHeight(screenHeight / pixelsPerMeter)
@@ -36,6 +38,9 @@ void Simulation::Reset()
             particles.push_back(particle);
         }
     }
+
+    CalculateDensities();
+    CalculatePressures();
 }
 
 // Draw particles as circles, converting from world units to screen pixels.
@@ -48,7 +53,9 @@ void Simulation::Draw() const
             particle.position.y * pixelsPerMeter
         };
 
-        DrawCircleV(screenPosition, particleRadius * pixelsPerMeter, BLUE);
+        const Color particleColor = GetPressureColor(particle.pressure);
+
+        DrawCircleV(screenPosition, particleRadius * pixelsPerMeter, particleColor);
     }
 }
 
@@ -61,6 +68,9 @@ void Simulation::Update(float deltaTime)
 
     IntegrateParticles(deltaTime);
     ResolveBoundaryCollisions();
+
+    CalculateDensities();
+    CalculatePressures();
 }
 
 void Simulation::ClearAccelerations()
@@ -158,4 +168,67 @@ void Simulation::ApplyMousePush()
             particle.acceleration.y += directionAwayFromMouse.y * mouseStrength;
         }
     }
+}
+
+float Simulation::SmoothingKernel(float distance) const
+{
+    if (distance >= smoothingRadius)
+    {
+        return 0.0f;
+    }
+
+    const float h = smoothingRadius;
+    const float value = h * h - distance * distance;
+    const float scale = 4.0f / (PI * std::pow(h, 8.0f));
+
+    return scale * value * value * value;
+}
+
+void Simulation::CalculateDensities()
+{
+    for (Particle& particle : particles)
+    {
+        particle.density = 0.0f;
+
+        for (const Particle& neighbour : particles)
+        {
+            const float offsetX = particle.position.x - neighbour.position.x;
+            const float offsetY = particle.position.y - neighbour.position.y;
+
+            const float distance = sqrtf(offsetX * offsetX + offsetY * offsetY);
+
+            // In 2D, density is mass distributed across area by the kernel.
+            particle.density += particleMass * SmoothingKernel(distance);
+        }
+    }
+}
+
+void Simulation::CalculatePressures()
+{
+    for (Particle& particle : particles)
+    {
+        const float densityError = particle.density - targetDensity;
+
+        particle.pressure = pressureStiffness * densityError;
+    }
+}
+
+Color Simulation::GetPressureColor(float pressure) const
+{
+    if (pressure < -1.0f)
+    {
+        return SKYBLUE;
+    }
+
+    if (pressure <= 1.0f)
+    {
+        return BLUE;
+    }
+
+    if (pressure < 30.0f)
+    {
+        return ORANGE;
+    }
+
+    return RED;
 }
