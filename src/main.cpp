@@ -1,5 +1,7 @@
 #include "raylib.h"
 
+#include "Simulation.h"
+
 int main()
 {
     const int screenWidth = 1000;
@@ -8,13 +10,19 @@ int main()
     InitWindow(screenWidth, screenHeight, "Fluid Simulation");
     SetTargetFPS(60);
 
+    Simulation simulation(screenWidth, screenHeight);
+
     while (!WindowShouldClose())
     {
+        const float deltaTime = GetFrameTime();
+
+        simulation.Update(deltaTime);
+
         BeginDrawing();
 
         ClearBackground(BLACK);
 
-        DrawCircle(screenWidth / 2, screenHeight / 2, 60, BLUE);
+        simulation.Draw();
 
         EndDrawing();
     }

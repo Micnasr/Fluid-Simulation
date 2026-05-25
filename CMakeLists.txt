@@ -20,6 +20,9 @@ FetchContent_MakeAvailable(raylib)
 
 add_executable(FluidSimulation
     src/main.cpp
+    src/Particle.h
+    src/Simulation.h
+    src/Simulation.cpp
 )
 
 target_link_libraries(FluidSimulation PRIVATE raylib)
