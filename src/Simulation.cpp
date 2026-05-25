@@ -61,16 +61,16 @@ void Simulation::Draw() const
 
 void Simulation::Update(float deltaTime)
 {
+    CalculateDensities();
+    CalculatePressures();
+    
     ClearAccelerations();
-
     ApplyGravity();
     ApplyMousePush();
+    ApplyPressureAccelerations();
 
     IntegrateParticles(deltaTime);
     ResolveBoundaryCollisions();
-
-    CalculateDensities();
-    CalculatePressures();
 }
 
 void Simulation::ClearAccelerations()
@@ -203,13 +203,13 @@ void Simulation::CalculateDensities()
     }
 }
 
-void Simulation::CalculatePressures()
+void Simulation::CalculatePressures() // TODO: can this be inplemented above in CalculateDensities() to save a loop?
 {
     for (Particle& particle : particles)
     {
         const float densityError = particle.density - targetDensity;
 
-        particle.pressure = pressureStiffness * densityError;
+        particle.pressure = std::max(0.0f, pressureStiffness * densityError);
     }
 }
 
@@ -231,4 +231,72 @@ Color Simulation::GetPressureColor(float pressure) const
     }
 
     return RED;
+}
+
+float Simulation::PressureKernelDerivative(float distance) const
+{
+    if (distance >= smoothingRadius)
+    {
+        return 0.0f;
+    }
+
+    const float h = smoothingRadius;
+    const float value = h - distance;
+    const float scale = -30.0f / (PI * std::pow(h, 5.0f));
+
+    return scale * value * value;
+}
+
+void Simulation::ApplyPressureAccelerations()
+{
+    for (Particle& particle : particles)
+    {
+        Vector2 pressureAcceleration = { 0.0f, 0.0f };
+
+        for (const Particle& neighbour : particles)
+        {
+            if (&particle == &neighbour)
+            {
+                continue;
+            }
+
+            const Vector2 offset = {
+                particle.position.x - neighbour.position.x,
+                particle.position.y - neighbour.position.y
+            };
+
+            const float distance = sqrtf(offset.x * offset.x + offset.y * offset.y);
+
+            if (distance <= 0.0f || distance >= smoothingRadius)
+            {
+                continue;
+            }
+
+            const Vector2 directionAwayFromNeighbour = {
+                offset.x / distance,
+                offset.y / distance
+            };
+
+            const float sharedPressure = (particle.pressure + neighbour.pressure) * 0.5f;
+
+            const float slope = PressureKernelDerivative(distance);
+
+            const float densityProduct = particle.density * neighbour.density;
+
+            if (densityProduct <= 0.0f)
+            {
+                continue;
+            }
+
+			// Equation 10 from "Smoothed Particle Hydrodynamics for Fluid Simulation"
+            const float accelerationMagnitude = -particleMass * sharedPressure * slope / densityProduct;
+
+            pressureAcceleration.x += directionAwayFromNeighbour.x * accelerationMagnitude;
+
+            pressureAcceleration.y += directionAwayFromNeighbour.y * accelerationMagnitude;
+        }
+
+        particle.acceleration.x += pressureAcceleration.x;
+        particle.acceleration.y += pressureAcceleration.y;
+    }
 }

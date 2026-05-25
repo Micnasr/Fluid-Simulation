@@ -24,6 +24,9 @@ private:
     float SmoothingKernel(float distance) const;
     
     void CalculatePressures();
+    void ApplyPressureAccelerations();
+    float PressureKernelDerivative(float distance) const;
+
     Color GetPressureColor(float pressure) const;
 
     std::vector<Particle> particles;
