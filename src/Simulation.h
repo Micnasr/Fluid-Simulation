@@ -1,8 +1,30 @@
 #pragma once
 
+#include <cstddef>
+#include <functional>
+#include <unordered_map>
 #include <vector>
 
 #include "Particle.h"
+
+struct SpatialCell
+{
+    int x;
+    int y;
+
+    bool operator==(const SpatialCell&) const = default;
+};
+
+struct SpatialCellHash
+{
+    std::size_t operator()(const SpatialCell& cell) const
+    {
+        const std::size_t hashX = std::hash<int>{}(cell.x);
+        const std::size_t hashY = std::hash<int>{}(cell.y);
+
+        return hashX ^ (hashY << 1);
+    }
+};
 
 class Simulation
 {
@@ -22,6 +44,9 @@ private:
     void IntegrateParticles(float deltaTime);
     void ResolveBoundaryCollisions();
     float DistanceBetween(Vector2 firstPosition, Vector2 secondPosition) const;
+
+    SpatialCell GetSpatialCell(Vector2 position) const;
+    void BuildSpatialGrid();
     
     void CalculateDensitiesAndPressures();
     float SmoothingKernel(float distance) const;
@@ -35,6 +60,7 @@ private:
     Color GetPressureColor(float pressure) const;
 
     std::vector<Particle> particles;
+    std::unordered_map<SpatialCell, std::vector<std::size_t>, SpatialCellHash> spatialGrid;
 
     float pixelsPerMeter = 100.0f;
     float worldWidth;

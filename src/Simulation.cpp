@@ -4,6 +4,16 @@
 
 #include <cmath>
 
+namespace
+{
+    // Cells that can contain particles within one smoothing radius.
+    constexpr SpatialCell NeighbourCellOffsets[] = {
+        { -1, -1 }, { 0, -1 }, { 1, -1 },
+        { -1,  0 }, { 0,  0 }, { 1,  0 },
+        { -1,  1 }, { 0,  1 }, { 1,  1 }
+    };
+}
+
 Simulation::Simulation(int screenWidth, int screenHeight)
     : worldWidth(screenWidth / pixelsPerMeter),
       worldHeight(screenHeight / pixelsPerMeter)
@@ -16,8 +26,8 @@ void Simulation::Reset()
 {
     particles.clear();
 
-    constexpr int columns = 20;
-    constexpr int rows = 30;
+    constexpr int columns = 50;
+    constexpr int rows = 50;
 
     const float blockWidth = (columns - 1) * particleSpacing;
     const float startX = (worldWidth - blockWidth) * 0.5f;
@@ -44,6 +54,7 @@ void Simulation::Reset()
         }
     }
 
+    BuildSpatialGrid();
     CalculateDensitiesAndPressures();
 }
 
@@ -65,11 +76,13 @@ void Simulation::Draw() const
 
 void Simulation::Update(float deltaTime)
 {
-    constexpr int substeps = 4;
+    constexpr int substeps = 1;
     const float stepTime = deltaTime / substeps;
 
     for (int step = 0; step < substeps; ++step)
     {
+        BuildSpatialGrid();
+
         CalculateDensitiesAndPressures();
 
         ClearAccelerations();
@@ -154,6 +167,28 @@ float Simulation::DistanceBetween(Vector2 firstPosition, Vector2 secondPosition)
     return sqrtf(offsetX * offsetX + offsetY * offsetY);
 }
 
+// Returns the spatial-hash cell containing a world-space position.
+SpatialCell Simulation::GetSpatialCell(Vector2 position) const
+{
+    return {
+        static_cast<int>(std::floor(position.x / smoothingRadius)),
+        static_cast<int>(std::floor(position.y / smoothingRadius))
+    };
+}
+
+// Rebuilds cell buckets from current particle positions.
+void Simulation::BuildSpatialGrid()
+{
+    spatialGrid.clear();
+
+    for (std::size_t particleIndex = 0; particleIndex < particles.size(); ++particleIndex)
+    {
+        const SpatialCell cell = GetSpatialCell(particles[particleIndex].position);
+
+        spatialGrid[cell].push_back(particleIndex);
+    }
+}
+
 void Simulation::ApplyMousePush()
 {
     if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT))
@@ -207,17 +242,38 @@ float Simulation::SmoothingKernel(float distance) const
     return scale * value * value * value;
 }
 
+// Calculates local density from nearby cells, then derives pressure.
 void Simulation::CalculateDensitiesAndPressures()
 {
     for (Particle& particle : particles)
     {
         particle.density = 0.0f;
 
-        for (const Particle& neighbour : particles)
-        {
-            const float distance = DistanceBetween(particle.position, neighbour.position);
+        const SpatialCell particleCell = GetSpatialCell(particle.position);
 
-            particle.density += particleMass * SmoothingKernel(distance);
+		// Iterate over the particle's cell and its 8 neighbours to find nearby particles that contribute to density.
+        for (const SpatialCell& cellOffset : NeighbourCellOffsets)
+        {
+            const SpatialCell nearbyCell = {
+                particleCell.x + cellOffset.x,
+                particleCell.y + cellOffset.y
+            };
+
+            const auto bucket = spatialGrid.find(nearbyCell);
+
+            if (bucket == spatialGrid.end())
+            {
+                continue;
+            }
+
+            for (const std::size_t neighbourIndex : bucket->second)
+            {
+                const Particle& neighbour = particles[neighbourIndex];
+
+                const float distance = DistanceBetween(particle.position, neighbour.position);
+
+                particle.density += particleMass * SmoothingKernel(distance);
+            }
         }
 
         const float densityError = particle.density - targetDensity;
@@ -260,68 +316,92 @@ float Simulation::PressureKernelDerivative(float distance) const
 }
 
 void Simulation::ApplyPressureAccelerations()
-{
+{   
+    // Calculate the total pressure acceleration acting on each particle.
     for (std::size_t i = 0; i < particles.size(); ++i)
     {
         Particle& particle = particles[i];
         Vector2 pressureAcceleration = { 0.0f, 0.0f };
 
-        for (std::size_t j = 0; j < particles.size(); ++j)
+        const SpatialCell particleCell = GetSpatialCell(particle.position);
+
+        // Search only spatial-hash cells that can contain SPH neighbours.
+        for (const SpatialCell& cellOffset : NeighbourCellOffsets)
         {
-            if (i == j)
-            {
-                continue;
-            }
-
-            const Particle& neighbour = particles[j];
-
-            const Vector2 offset = {
-                particle.position.x - neighbour.position.x,
-                particle.position.y - neighbour.position.y
+            const SpatialCell nearbyCell = {
+                particleCell.x + cellOffset.x,
+                particleCell.y + cellOffset.y
             };
 
-            float distance = DistanceBetween(particle.position, neighbour.position);
+            const auto bucket = spatialGrid.find(nearbyCell);
 
-            if (distance >= smoothingRadius)
+            if (bucket == spatialGrid.end())
             {
                 continue;
             }
 
-            Vector2 directionAwayFromNeighbour;
+            // Accumulate pressure contributions from particles in this nearby cell
+            for (const std::size_t j : bucket->second)
+            {
+                if (i == j)
+                {
+                    continue;
+                }
 
-            if (distance < 0.0001f)
-            {
-                // Coincident particles still need opposite separation pressure.
-                directionAwayFromNeighbour = {i < j ? -1.0f : 1.0f, 0.0f};
-                distance = 0.0001f;
-            }
-            else
-            {
-                directionAwayFromNeighbour = {
-                    offset.x / distance,
-                    offset.y / distance
+                const Particle& neighbour = particles[j];
+
+                const Vector2 offset = {
+                    particle.position.x - neighbour.position.x,
+                    particle.position.y - neighbour.position.y
                 };
+
+                float distance = DistanceBetween(particle.position, neighbour.position);
+
+                if (distance >= smoothingRadius)
+                {
+                    continue;
+                }
+
+                Vector2 directionAwayFromNeighbour;
+
+                if (distance < 0.0001f)
+                {
+                    // Overlapping particles have no direction between them,
+                    // so assign an opposite fallback direction to separate them.
+                    directionAwayFromNeighbour = {i < j ? -1.0f : 1.0f, 0.0f};
+
+                    distance = 0.0001f;
+                }
+                else
+                {
+					// Calculate the normalized direction away from the neighbour particle.
+                    directionAwayFromNeighbour = {
+                        offset.x / distance,
+                        offset.y / distance
+                    };
+                }
+
+                const float sharedPressure = (particle.pressure + neighbour.pressure) * 0.5f;
+
+                const float slope = PressureKernelDerivative(distance);
+
+                const float densityProduct = particle.density * neighbour.density;
+
+                if (densityProduct <= 0.0f)
+                {
+                    continue;
+                }
+
+                // Equation 10 from "Smoothed Particle Hydrodynamics for Fluid Simulation"
+                const float accelerationMagnitude = -particleMass * sharedPressure * slope / densityProduct;
+
+                pressureAcceleration.x += directionAwayFromNeighbour.x * accelerationMagnitude;
+
+                pressureAcceleration.y += directionAwayFromNeighbour.y * accelerationMagnitude;
             }
-
-            const float sharedPressure = (particle.pressure + neighbour.pressure) * 0.5f;
-
-            const float slope = PressureKernelDerivative(distance);
-
-            const float densityProduct = particle.density * neighbour.density;
-
-            if (densityProduct <= 0.0f)
-            {
-                continue;
-            }
-
-			// Equation 10 from "Smoothed Particle Hydrodynamics for Fluid Simulation"
-            const float accelerationMagnitude = -particleMass * sharedPressure * slope / densityProduct;
-
-            pressureAcceleration.x += directionAwayFromNeighbour.x * accelerationMagnitude;
-
-            pressureAcceleration.y += directionAwayFromNeighbour.y * accelerationMagnitude;
         }
 
+        // Apply the sum of all nearby pressure interactions this substep.
         particle.acceleration.x += pressureAcceleration.x;
         particle.acceleration.y += pressureAcceleration.y;
     }
@@ -342,45 +422,71 @@ float Simulation::ViscosityKernelLaplacian(float distance) const
 
 void Simulation::ApplyViscosityAccelerations()
 {
-    for (Particle& particle : particles)
+    // Calculate the total viscosity acceleration acting on each particle.
+    for (std::size_t i = 0; i < particles.size(); ++i)
     {
+        Particle& particle = particles[i];
         Vector2 viscosityAcceleration = { 0.0f, 0.0f };
 
-        for (const Particle& neighbour : particles)
+        const SpatialCell particleCell = GetSpatialCell(particle.position);
+
+        // Search only spatial-hash cells that can contain SPH neighbours.
+        for (const SpatialCell& cellOffset : NeighbourCellOffsets)
         {
-            if (&particle == &neighbour)
-            {
-                continue;
-            }
-
-            const float distance = DistanceBetween(particle.position, neighbour.position);
-
-            if (distance >= smoothingRadius)
-            {
-                continue;
-            }
-
-            const float densityProduct = particle.density * neighbour.density;
-
-            if (densityProduct <= 0.0f)
-            {
-                continue;
-            }
-
-            const Vector2 velocityDifference = {
-                neighbour.velocity.x - particle.velocity.x,
-                neighbour.velocity.y - particle.velocity.y
+            const SpatialCell nearbyCell = {
+                particleCell.x + cellOffset.x,
+                particleCell.y + cellOffset.y
             };
 
-            const float laplacian = ViscosityKernelLaplacian(distance);
+            const auto bucket = spatialGrid.find(nearbyCell);
 
-			// Equation 14 from "Smoothed Particle Hydrodynamics for Fluid Simulation"
-            const float influence = viscosityStrength * particleMass * laplacian / densityProduct;
+            if (bucket == spatialGrid.end())
+            {
+                continue;
+            }
 
-            viscosityAcceleration.x += velocityDifference.x * influence;
-            viscosityAcceleration.y += velocityDifference.y * influence;
+            // Accumulate viscosity contributions from particles in this cell.
+            for (const std::size_t neighbourIndex : bucket->second)
+            {
+                if (i == neighbourIndex)
+                {
+                    continue;
+                }
+
+                const Particle& neighbour = particles[neighbourIndex];
+
+                const float distance = DistanceBetween(particle.position, neighbour.position);
+
+                if (distance >= smoothingRadius)
+                {
+                    continue;
+                }
+
+                const float densityProduct = particle.density * neighbour.density;
+
+                if (densityProduct <= 0.0f)
+                {
+                    continue;
+                }
+
+                // Viscosity accelerates this particle toward the velocities of its neighbours, reducing local velocity differences.
+                const Vector2 velocityDifference = {
+                    neighbour.velocity.x - particle.velocity.x,
+                    neighbour.velocity.y - particle.velocity.y
+                };
+
+                const float laplacian = ViscosityKernelLaplacian(distance);
+
+                // Equation 14 from "Smoothed Particle Hydrodynamics for Fluid Simulation"
+                const float influence = viscosityStrength * particleMass * laplacian / densityProduct;
+
+                viscosityAcceleration.x += velocityDifference.x * influence;
+
+                viscosityAcceleration.y += velocityDifference.y * influence;
+            }
         }
 
+        // Apply the sum of all nearby viscosity interactions this substep.
         particle.acceleration.x += viscosityAcceleration.x;
         particle.acceleration.y += viscosityAcceleration.y;
     }
