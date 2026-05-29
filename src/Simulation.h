@@ -59,6 +59,8 @@ private:
 
     Color GetPressureColor(float pressure) const;
 
+    void PredictPositions();
+
     std::vector<Particle> particles;
     std::unordered_map<SpatialCell, std::vector<std::size_t>, SpatialCellHash> spatialGrid;
 
@@ -71,8 +73,8 @@ private:
     float spawnJitter = 0.01f;
     
     float particleMass = 0.01f;
-    float targetDensity = 1.0f;
-    float pressureStiffness = 20.0f;
+    float targetDensity = 0.8f;
+    float pressureStiffness = 30.0f;
     float viscosityStrength = 0.01f;
     
     float gravity = 9.81f;
@@ -83,4 +85,6 @@ private:
     float mouseStrength = 25.0f;
 
     float smoothingRadius = 0.25f;
+
+	float predictionTime = 1.0f / 120.0f; // Predict 1/120 second into the future
 };

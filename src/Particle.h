@@ -9,6 +9,8 @@ struct Particle
     Vector2 velocity{};
     Vector2 acceleration{};
 
+    Vector2 predictedPosition{};
+
     float density = 0.0f;
     float pressure = 0.0f;
 };

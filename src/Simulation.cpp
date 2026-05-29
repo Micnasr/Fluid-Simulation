@@ -2,6 +2,7 @@
 
 #include "raylib.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -50,6 +51,8 @@ void Simulation::Reset()
                 startY + row * particleSpacing + jitterY
             };
 
+            particle.predictedPosition = particle.position;
+
             particles.push_back(particle);
         }
     }
@@ -81,6 +84,7 @@ void Simulation::Update(float deltaTime)
 
     for (int step = 0; step < substeps; ++step)
     {
+		PredictPositions();
         BuildSpatialGrid();
 
         CalculateDensitiesAndPressures();
@@ -176,14 +180,14 @@ SpatialCell Simulation::GetSpatialCell(Vector2 position) const
     };
 }
 
-// Rebuilds cell buckets from current particle positions.
+// Rebuilds cell buckets from predicted particle positions.
 void Simulation::BuildSpatialGrid()
 {
     spatialGrid.clear();
 
     for (std::size_t particleIndex = 0; particleIndex < particles.size(); ++particleIndex)
     {
-        const SpatialCell cell = GetSpatialCell(particles[particleIndex].position);
+        const SpatialCell cell = GetSpatialCell(particles[particleIndex].predictedPosition);
 
         spatialGrid[cell].push_back(particleIndex);
     }
@@ -249,7 +253,7 @@ void Simulation::CalculateDensitiesAndPressures()
     {
         particle.density = 0.0f;
 
-        const SpatialCell particleCell = GetSpatialCell(particle.position);
+        const SpatialCell particleCell = GetSpatialCell(particle.predictedPosition);
 
 		// Iterate over the particle's cell and its 8 neighbours to find nearby particles that contribute to density.
         for (const SpatialCell& cellOffset : NeighbourCellOffsets)
@@ -270,7 +274,7 @@ void Simulation::CalculateDensitiesAndPressures()
             {
                 const Particle& neighbour = particles[neighbourIndex];
 
-                const float distance = DistanceBetween(particle.position, neighbour.position);
+                const float distance = DistanceBetween(particle.predictedPosition, neighbour.predictedPosition);
 
                 particle.density += particleMass * SmoothingKernel(distance);
             }
@@ -323,7 +327,7 @@ void Simulation::ApplyPressureAccelerations()
         Particle& particle = particles[i];
         Vector2 pressureAcceleration = { 0.0f, 0.0f };
 
-        const SpatialCell particleCell = GetSpatialCell(particle.position);
+        const SpatialCell particleCell = GetSpatialCell(particle.predictedPosition);
 
         // Search only spatial-hash cells that can contain SPH neighbours.
         for (const SpatialCell& cellOffset : NeighbourCellOffsets)
@@ -351,11 +355,11 @@ void Simulation::ApplyPressureAccelerations()
                 const Particle& neighbour = particles[j];
 
                 const Vector2 offset = {
-                    particle.position.x - neighbour.position.x,
-                    particle.position.y - neighbour.position.y
+                    particle.predictedPosition.x - neighbour.predictedPosition.x,
+                    particle.predictedPosition.y - neighbour.predictedPosition.y
                 };
 
-                float distance = DistanceBetween(particle.position, neighbour.position);
+                float distance = DistanceBetween(particle.predictedPosition, neighbour.predictedPosition);
 
                 if (distance >= smoothingRadius)
                 {
@@ -428,7 +432,7 @@ void Simulation::ApplyViscosityAccelerations()
         Particle& particle = particles[i];
         Vector2 viscosityAcceleration = { 0.0f, 0.0f };
 
-        const SpatialCell particleCell = GetSpatialCell(particle.position);
+        const SpatialCell particleCell = GetSpatialCell(particle.predictedPosition);
 
         // Search only spatial-hash cells that can contain SPH neighbours.
         for (const SpatialCell& cellOffset : NeighbourCellOffsets)
@@ -455,7 +459,7 @@ void Simulation::ApplyViscosityAccelerations()
 
                 const Particle& neighbour = particles[neighbourIndex];
 
-                const float distance = DistanceBetween(particle.position, neighbour.position);
+                const float distance = DistanceBetween(particle.predictedPosition, neighbour.predictedPosition);
 
                 if (distance >= smoothingRadius)
                 {
@@ -489,5 +493,17 @@ void Simulation::ApplyViscosityAccelerations()
         // Apply the sum of all nearby viscosity interactions this substep.
         particle.acceleration.x += viscosityAcceleration.x;
         particle.acceleration.y += viscosityAcceleration.y;
+    }
+}
+
+// Estimates where particles will be shortly for density and pressure calculations.
+void Simulation::PredictPositions()
+{
+    for (Particle& particle : particles)
+    {
+        particle.predictedPosition = {
+            particle.position.x + particle.velocity.x * predictionTime,
+            particle.position.y + particle.velocity.y * predictionTime
+        };
     }
 }
