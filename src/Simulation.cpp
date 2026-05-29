@@ -193,16 +193,20 @@ void Simulation::BuildSpatialGrid()
     }
 }
 
+// Push / Pull the particles with the mouse.
 void Simulation::ApplyMousePush()
 {
-    if (!IsMouseButtonDown(MOUSE_BUTTON_LEFT))
+    const bool pushing = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+    const bool pulling = IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
+
+    if (!pushing && !pulling)
     {
         return;
     }
 
     const Vector2 mouseScreenPosition = GetMousePosition();
 
-	// Convert mouse position from screen pixels to world units.
+    // Convert mouse position from screen pixels to world units.
     const Vector2 mousePosition = {
         mouseScreenPosition.x / pixelsPerMeter,
         mouseScreenPosition.y / pixelsPerMeter
@@ -215,20 +219,28 @@ void Simulation::ApplyMousePush()
             particle.position.y - mousePosition.y
         };
 
-        // Calculate the distance from the particle to the mouse position.
-        const float distance = DistanceBetween(particle.position, mousePosition);
+        const float distance =
+            DistanceBetween(particle.position, mousePosition);
 
-		// If the particle is within the mouse radius, apply a force pushing it away from the mouse position.
-        if (distance > 0.0f && distance < mouseRadius)
+        if (distance <= 0.0f || distance >= mouseRadius)
         {
-            const Vector2 directionAwayFromMouse = {
-                offset.x / distance,
-                offset.y / distance
-            };
-
-            particle.acceleration.x += directionAwayFromMouse.x * mouseStrength;
-            particle.acceleration.y += directionAwayFromMouse.y * mouseStrength;
+            continue;
         }
+
+        Vector2 direction = {
+            offset.x / distance,
+            offset.y / distance
+        };
+
+        // Right click reverses the direction, pulling particles toward the mouse.
+        if (pulling)
+        {
+            direction.x *= -1.0f;
+            direction.y *= -1.0f;
+        }
+
+        particle.acceleration.x += direction.x * mouseStrength;
+        particle.acceleration.y += direction.y * mouseStrength;
     }
 }
 
@@ -246,12 +258,27 @@ float Simulation::SmoothingKernel(float distance) const
     return scale * value * value * value;
 }
 
+float Simulation::NearSmoothingKernel(float distance) const
+{
+    if (distance >= smoothingRadius)
+    {
+        return 0.0f;
+    }
+
+    const float h = smoothingRadius;
+    const float value = h - distance;
+    const float scale = 10.0f / (PI * std::pow(h, 5.0f));
+
+    return scale * value * value * value;
+}
+
 // Calculates local density from nearby cells, then derives pressure.
 void Simulation::CalculateDensitiesAndPressures()
 {
     for (Particle& particle : particles)
     {
         particle.density = 0.0f;
+        particle.nearDensity = 0.0f;
 
         const SpatialCell particleCell = GetSpatialCell(particle.predictedPosition);
 
@@ -277,11 +304,15 @@ void Simulation::CalculateDensitiesAndPressures()
                 const float distance = DistanceBetween(particle.predictedPosition, neighbour.predictedPosition);
 
                 particle.density += particleMass * SmoothingKernel(distance);
+
+                // Near density uses a sharper kernel so close particles contribute more strongly.
+                particle.nearDensity += particleMass * NearSmoothingKernel(distance);
             }
         }
 
         const float densityError = particle.density - targetDensity;
-        particle.pressure = std::max(0.0f, pressureStiffness * densityError);
+        particle.pressure = pressureStiffness * densityError;
+        particle.nearPressure = nearPressureStiffness * particle.nearDensity;
     }
 }
 
@@ -306,6 +337,20 @@ Color Simulation::GetPressureColor(float pressure) const
 }
 
 float Simulation::PressureKernelDerivative(float distance) const
+{
+    if (distance >= smoothingRadius)
+    {
+        return 0.0f;
+    }
+
+    const float h = smoothingRadius;
+    const float value = h - distance;
+    const float scale = -30.0f / (PI * std::pow(h, 5.0f));
+
+    return scale * value * value;
+}
+
+float Simulation::NearPressureKernelDerivative(float distance) const
 {
     if (distance >= smoothingRadius)
     {
@@ -386,22 +431,27 @@ void Simulation::ApplyPressureAccelerations()
                 }
 
                 const float sharedPressure = (particle.pressure + neighbour.pressure) * 0.5f;
+                const float sharedNearPressure = (particle.nearPressure + neighbour.nearPressure) * 0.5f;
 
                 const float slope = PressureKernelDerivative(distance);
+                const float nearSlope = NearPressureKernelDerivative(distance);
 
                 const float densityProduct = particle.density * neighbour.density;
+                const float nearDensityProduct = particle.density * neighbour.nearDensity;
 
-                if (densityProduct <= 0.0f)
+                if (densityProduct <= 0.0f || nearDensityProduct <= 0.0f)
                 {
                     continue;
                 }
 
                 // Equation 10 from "Smoothed Particle Hydrodynamics for Fluid Simulation"
-                const float accelerationMagnitude = -particleMass * sharedPressure * slope / densityProduct;
+                const float pressureAccelerationMagnitude = -particleMass * sharedPressure * slope / densityProduct;
+                const float nearPressureAccelerationMagnitude = -particleMass * sharedNearPressure * nearSlope / nearDensityProduct;
 
-                pressureAcceleration.x += directionAwayFromNeighbour.x * accelerationMagnitude;
+                const float totalAccelerationMagnitude = pressureAccelerationMagnitude + nearPressureAccelerationMagnitude;
 
-                pressureAcceleration.y += directionAwayFromNeighbour.y * accelerationMagnitude;
+                pressureAcceleration.x += directionAwayFromNeighbour.x * totalAccelerationMagnitude;
+                pressureAcceleration.y += directionAwayFromNeighbour.y * totalAccelerationMagnitude;
             }
         }
 

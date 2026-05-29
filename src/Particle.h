@@ -13,4 +13,8 @@ struct Particle
 
     float density = 0.0f;
     float pressure = 0.0f;
+
+    // Near density / near pressure emphasize very close neighbours, adding short range repulsion that helps prevent particles from overlapping.
+    float nearDensity = 0.0f;
+    float nearPressure = 0.0f;
 };

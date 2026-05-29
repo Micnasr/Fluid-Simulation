@@ -50,9 +50,11 @@ private:
     
     void CalculateDensitiesAndPressures();
     float SmoothingKernel(float distance) const;
+    float NearSmoothingKernel(float distance) const;
     
     void ApplyPressureAccelerations();
     float PressureKernelDerivative(float distance) const;
+    float NearPressureKernelDerivative(float distance) const;
 
     void ApplyViscosityAccelerations();
     float ViscosityKernelLaplacian(float distance) const;
@@ -74,8 +76,8 @@ private:
     
     float particleMass = 0.01f;
     float targetDensity = 0.8f;
-    float pressureStiffness = 30.0f;
-    float viscosityStrength = 0.01f;
+    float pressureStiffness = 20.0f;
+    float viscosityStrength = 0.03f;
     
     float gravity = 9.81f;
 
@@ -87,4 +89,6 @@ private:
     float smoothingRadius = 0.25f;
 
 	float predictionTime = 1.0f / 120.0f; // Predict 1/120 second into the future
+
+    float nearPressureStiffness = 2.0f;
 };
